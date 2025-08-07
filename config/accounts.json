@@ -23,7 +23,7 @@
       "initial_balance": 0,
       "description": "支付宝钱包余额",
       "aliases": {
-        "chinese": ["支付宝", "蚂蚁金服", "余额宝", "花呗"],
+        "chinese": ["支付宝", "蚂蚁金服", "余额宝"],
         "english": ["alipay", "ant pay", "yu'ebao"]
       }
     },

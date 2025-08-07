@@ -151,7 +151,7 @@ class TransactionValidator:
             errors.append("动作类型不能为空")
             return {'errors': errors, 'warnings': warnings, 'cleaned_value': cleaned_value}
         
-        valid_actions = ['expense', 'income', 'transfer']
+        valid_actions = ['expense', 'income', 'transfer', 'loan_payment']
         if action not in valid_actions:
             errors.append(f"无效的动作类型: {action}，有效值为: {', '.join(valid_actions)}")
         else:
@@ -291,6 +291,13 @@ class TransactionValidator:
                 warnings.append(f"转账的目标账户 '{debit_account}' 通常应该是资产类账户")
             if not self._is_asset_account(credit_account):
                 warnings.append(f"转账的来源账户 '{credit_account}' 通常应该是资产类账户")
+        
+        elif action == 'loan_payment':
+            # 还款：借方应该是负债账户，贷方应该是资产账户
+            if not self._is_liability_account(debit_account):
+                warnings.append(f"还款交易的借方账户 '{debit_account}' 通常应该是负债类账户")
+            if not self._is_asset_account(credit_account):
+                warnings.append(f"还款交易的贷方账户 '{credit_account}' 通常应该是资产类账户")
         
         return {'errors': errors, 'warnings': warnings, 'suggestions': suggestions}
     

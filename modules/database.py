@@ -8,8 +8,24 @@ from contextlib import contextmanager
 class DatabaseManager:
     def __init__(self, db_path: str = "data/transactions.db"):
         self.db_path = db_path
+        self.config_path = "config"
+        self.accounts_config = self._load_config("accounts.json")
         self._ensure_database_exists()
         self._init_tables()
+
+    def _load_config(self, filename: str) -> dict:
+        """加载配置文件"""
+        try:
+            with open(os.path.join(self.config_path, filename), 'r', encoding='utf-8') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            print(f"配置文件 {filename} 未找到")
+            return {}
+        except json.JSONDecodeError:
+            print(f"配置文件 {filename} 格式错误")
+            return {}
+
+
     
     def _ensure_database_exists(self):
         """确保数据库文件和目录存在"""
@@ -155,8 +171,30 @@ class DatabaseManager:
     
     def _get_account_type(self, account_name: str) -> str:
         """根据账户名称推断账户类型"""
-        # 这里可以从配置文件中加载账户类型映射
-        # 简化实现，基于名称推断
+        # 从配置文件中查找账户类型
+        all_accounts = self.accounts_config or {}
+        
+        # 查找负债账户
+        liability_accounts = all_accounts.get("liability_accounts", {})
+        if account_name in liability_accounts:
+            return "liability"
+        
+        # 查找资产账户
+        asset_accounts = all_accounts.get("asset_accounts", {})
+        if account_name in asset_accounts:
+            return "asset"
+        
+        # 查找收入账户
+        revenue_accounts = all_accounts.get("revenue_accounts", {})
+        if account_name in revenue_accounts:
+            return "revenue"
+        
+        # 查找费用账户  
+        expense_accounts = all_accounts.get("expense_accounts", {})
+        if account_name in expense_accounts:
+            return "expense"
+        
+        # 默认推断（保持原逻辑作为兜底）
         if "费用" in account_name or "支出" in account_name:
             return "expense"
         elif "收入" in account_name:

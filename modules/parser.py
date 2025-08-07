@@ -56,7 +56,7 @@ class TransactionParser:
                 return self._partial_result(text, action, amount, payment_method, category, missing_info)
             
             # 生成会计分录
-            accounting_entry = self._generate_accounting_entry(action, amount, payment_method, category)
+            accounting_entry = self._generate_accounting_entry(action, amount, payment_method, category, text)
             
             if not accounting_entry:
                 return self._error_result("无法生成有效的会计分录")
@@ -91,22 +91,34 @@ class TransactionParser:
         return text
     
     def _parse_action(self, text: str) -> Optional[str]:
-        """解析动作类型"""
+        """解析动作类型 - 优先检查还款动作"""
         actions = self.keywords.get("actions", {})
         
+        # 优先检查还款动作（避免被expense覆盖）
+        if "loan_payment" in actions:
+            loan_words = actions["loan_payment"]
+            for word in loan_words.get("chinese", []):
+                if word in text:
+                    return "loan_payment"
+            for word in loan_words.get("english", []):
+                if word.lower() in text.lower():
+                    return "loan_payment"
+        
+        # 再检查其他动作
         for action_type, words_dict in actions.items():
-            # 检查中文关键词
+            if action_type == "loan_payment":  # 已经检查过了
+                continue
+                
             for word in words_dict.get("chinese", []):
                 if word in text:
                     return action_type
-            # 检查英文关键词
             for word in words_dict.get("english", []):
                 if word.lower() in text.lower():
                     return action_type
         
-        # 如果没有明确的动作词，根据上下文推测
-        if any(word in text for word in ["块", "元", "￥", "$", "yuan", "dollar"]):
-            return "expense"  # 默认为支出
+        # 默认推测
+        if any(word in text for word in ["块", "元", "￥", "$", "yuan", "dollar", "欧", "刀"]):
+            return "expense"
             
         return None
     
@@ -152,17 +164,33 @@ class TransactionParser:
     
     def _parse_payment_method(self, text: str) -> Optional[str]:
         """解析支付方式"""
-        payment_methods = self.keywords.get("payment_methods", {})
-        
-        for method_name, aliases_dict in payment_methods.items():
-            # 检查中文别名
-            for alias in aliases_dict.get("chinese", []):
-                if alias in text:
-                    return method_name
-            # 检查英文别名
-            for alias in aliases_dict.get("english", []):
-                if alias.lower() in text.lower():
-                    return method_name
+        # 如果是还款动作，不要把债务账户当作支付方式
+        if any(word in text for word in ["还", "还款", "pay off", "repay"]):
+            # 还款场景下，寻找非债务的支付方式
+            payment_methods = self.keywords.get("payment_methods", {})
+            debt_keywords = ["信用卡", "花呗", "白条", "房贷", "车贷"]
+            
+            for method_name, aliases_dict in payment_methods.items():
+                # 跳过债务相关的支付方式
+                if any(debt in method_name for debt in debt_keywords):
+                    continue
+                    
+                for alias in aliases_dict.get("chinese", []):
+                    if alias in text and alias not in debt_keywords:
+                        return method_name
+                for alias in aliases_dict.get("english", []):
+                    if alias.lower() in text.lower():
+                        return method_name
+        else:
+            # 正常的支付方式解析
+            payment_methods = self.keywords.get("payment_methods", {})
+            for method_name, aliases_dict in payment_methods.items():
+                for alias in aliases_dict.get("chinese", []):
+                    if alias in text:
+                        return method_name
+                for alias in aliases_dict.get("english", []):
+                    if alias.lower() in text.lower():
+                        return method_name
         
         return None
     
@@ -199,25 +227,85 @@ class TransactionParser:
                 best_match = category_name
         
         return best_match
+        
+    def _parse_debt_account(self, text: str) -> Optional[str]:
+        """解析负债账户类型"""
+        liability_accounts = self.accounts.get("liability_accounts", {})
+        
+        best_match = None
+        max_score = 0
+        
+        for account_name, config in liability_accounts.items():
+            score = 0
+            aliases = config.get("aliases", {})
+            
+            # 检查中文别名匹配
+            for alias in aliases.get("chinese", []):
+                if alias in text:
+                    score += len(alias)  # 长匹配优先
+            
+            # 检查英文别名匹配  
+            for alias in aliases.get("english", []):
+                if alias.lower() in text.lower():
+                    score += len(alias)
+            
+            if score > max_score:
+                max_score = score
+                best_match = account_name
+        
+        return best_match
+
+    def _map_payment_to_account(self, payment_method: str, action: str) -> str:
+        if not payment_method:
+            if action == "loan_payment":
+                return "银行存款"  # 还款默认用银行转账
+            else:
+                return "现金" 
+        
+        # 信用类支付方式映射到负债账户
+        credit_mapping = {
+            "信用卡": "信用卡欠款",
+            "花呗": "花呗", 
+            "白条": "白条"
+        }
+        
+        # 如果是信用类支付，直接返回对应的负债账户
+        if payment_method in credit_mapping:
+            return credit_mapping[payment_method]
+        
+        # 其他支付方式（支付宝、微信、现金等）直接返回
+        return payment_method
+
+
+
     
     def _generate_accounting_entry(self, action: str, amount: float, 
-                                 payment_method: str, category: str) -> Optional[dict]:
+                                payment_method: str, category: str, text: str = "") -> Optional[dict]:
         """生成会计分录"""
         if action == "expense":
-            # 支出：借方是费用账户，贷方是资产账户
+            # 支出：借方是费用账户，贷方是资产/负债账户
             debit = category or "其他费用"
-            credit = payment_method or "现金"
+            credit = self._map_payment_to_account(payment_method, action)
             return {"debit": debit, "credit": credit}
             
         elif action == "income":
             # 收入：借方是资产账户，贷方是收入账户
-            debit = payment_method or "银行存款"
+            debit = self._map_payment_to_account(payment_method, action) or "银行存款"
             credit = category or "其他收入"
             return {"debit": debit, "credit": credit}
             
+        elif action == "loan_payment":
+            # 还款：借方是负债账户，贷方是资产账户
+            debt_account = self._parse_debt_account(text)
+            if debt_account:
+                debit = debt_account
+            else:
+                debit = "个人借款"
+                
+            credit = self._map_payment_to_account(payment_method, action) or "银行存款"
+            return {"debit": debit, "credit": credit}
+            
         elif action == "transfer":
-            # 转账：需要解析转出和转入账户
-            # 这里简化处理，实际需要更复杂的逻辑
             return {"debit": "待确认", "credit": "待确认"}
         
         return None
